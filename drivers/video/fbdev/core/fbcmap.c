@@ -94,24 +94,22 @@ int fb_alloc_cmap_gfp(struct fb_cmap *cmap, int len, int transp, gfp_t flags)
 	int size = len * sizeof(u16);
 	int ret = -ENOMEM;
 
-	flags |= __GFP_NOWARN;
-
 	if (cmap->len != len) {
 		fb_dealloc_cmap(cmap);
 		if (!len)
 			return 0;
 
-		cmap->red = kzalloc(size, flags);
+		cmap->red = kmalloc(size, flags);
 		if (!cmap->red)
 			goto fail;
-		cmap->green = kzalloc(size, flags);
+		cmap->green = kmalloc(size, flags);
 		if (!cmap->green)
 			goto fail;
-		cmap->blue = kzalloc(size, flags);
+		cmap->blue = kmalloc(size, flags);
 		if (!cmap->blue)
 			goto fail;
 		if (transp) {
-			cmap->transp = kzalloc(size, flags);
+			cmap->transp = kmalloc(size, flags);
 			if (!cmap->transp)
 				goto fail;
 		} else {
@@ -262,36 +260,6 @@ int fb_set_cmap(struct fb_cmap *cmap, struct fb_info *info)
 		fb_copy_cmap(cmap, &info->cmap);
 
 	return rc;
-}
-
-int fb_user_to_kernel(struct fb_regrw_access_t_user *from_rw, struct fb_regrw_access_t **to_rw)
-{
-	int ret = 0;
-	printk("fb_user_to_kernel:user_rr.reg = 0x%x,user_rr.cnt = %d, user_rr.hs_mode = %d,user_rr.buf = 0x%8x\n",from_rw->address,from_rw->buffer_size,from_rw->use_hs_mode,from_rw->buffer);
-
-
-	*to_rw = kmalloc(sizeof(struct fb_regrw_access_t),GFP_KERNEL);
-
-	if (to_rw == NULL)
-		return -ENOMEM;
-
-	memset(*to_rw, 0, sizeof(struct fb_regrw_access_t));
-
-
-	(*to_rw)->address = from_rw->address;
-	(*to_rw)->buffer_size = from_rw->buffer_size;
-	(*to_rw)->use_hs_mode = from_rw->use_hs_mode;
-
-	(*to_rw)->buffer = kmalloc((*to_rw)->buffer_size*sizeof(__u8), GFP_KERNEL);
-	if(!((*to_rw)->buffer))
-		return -ENOMEM;
-
-	memset((*to_rw)->buffer, 0, (*to_rw)->buffer_size*sizeof(__u8));
-
-	if (copy_from_user((*to_rw)->buffer, from_rw->buffer, (*to_rw)->buffer_size*sizeof(__u8)))
-		return -ENOMEM;
-
-	return ret;
 }
 
 int fb_set_user_cmap(struct fb_cmap_user *cmap, struct fb_info *info)

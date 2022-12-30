@@ -312,7 +312,7 @@ static int dpp_check_format(struct dpp_device *dpp, struct dpp_params_info *p)
 	}
 
 	if (!test_bit(DPP_ATTR_HDR, &dpp->attr) && (p->hdr > DPP_HDR_OFF)) {
-		dpp_err("Not support hdr in DPP%d - VGRF only!\n",
+		dpp_err("Not support hdr in DPP%d - VG) only!\n",
 				dpp->id);
 		return -EINVAL;
 	}
@@ -474,6 +474,8 @@ static int dpp_set_config(struct dpp_device *dpp)
 	dpp_dbg("dpp%d configuration\n", dpp->id);
 
 	dpp->state = DPP_STATE_ON;
+	/* to prevent irq storm, irq enable is moved here */
+	dpp_reg_irq_enable(dpp->id, dpp->attr);
 err:
 	mutex_unlock(&dpp->lock);
 	return ret;

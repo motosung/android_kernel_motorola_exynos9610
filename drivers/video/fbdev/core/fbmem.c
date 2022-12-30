@@ -34,7 +34,6 @@
 #include <linux/fb.h>
 #include <linux/fbcon.h>
 #include <linux/mem_encrypt.h>
-#include <linux/overflow.h>
 
 #include <asm/fb.h>
 
@@ -984,7 +983,6 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 	if ((var->activate & FB_ACTIVATE_FORCE) ||
 	    memcmp(&info->var, var, sizeof(struct fb_var_screeninfo))) {
 		u32 activate = var->activate;
-		u32 unused;
 
 		/* When using FOURCC mode, make sure the red, green, blue and
 		 * transp fields are set to 0.
@@ -1004,15 +1002,6 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 			*var = info->var;
 			goto done;
 		}
-
-		/* bitfill_aligned() assumes that it's at least 8x8 */
-		if (var->xres < 8 || var->yres < 8)
-			return -EINVAL;
-
-		/* Too huge resolution causes multiplication overflow. */
-		if (check_mul_overflow(var->xres, var->yres, &unused) ||
-		    check_mul_overflow(var->xres_virtual, var->yres_virtual, &unused))
-			return -EINVAL;
 
 		ret = info->fbops->fb_check_var(var, info);
 
@@ -1104,17 +1093,6 @@ fb_blank(struct fb_info *info, int blank)
 }
 EXPORT_SYMBOL(fb_blank);
 
-int
-fb_read_reg(struct fb_info *info, struct fb_regrw_access_t *rr)
-{
-	int ret = 0;
-
-	if (info->fbops->fb_read_reg)
-		ret = info->fbops->fb_read_reg(info, rr);
-
-	return ret;
-}
-
 static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
@@ -1156,7 +1134,7 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	case FBIOGET_FSCREENINFO:
 		if (!lock_fb_info(info))
 			return -ENODEV;
-		memcpy(&fix, &info->fix, sizeof(fix));
+		fix = info->fix;
 		unlock_fb_info(info);
 
 		ret = copy_to_user(argp, &fix, sizeof(fix)) ? -EFAULT : 0;
@@ -1378,11 +1356,6 @@ static long fb_compat_ioctl(struct file *file, unsigned int cmd,
 	struct fb_ops *fb;
 	long ret = -ENOIOCTLCMD;
 
-	struct fb_regrw_access_t *rr;
-	struct fb_regrw_access_t_user user_rr;
-	int copy_size = 0;
-	void __user *argp = (void __user *)arg;
-
 	if (!info)
 		return -ENODEV;
 	fb = info->fbops;
@@ -1404,42 +1377,6 @@ static long fb_compat_ioctl(struct file *file, unsigned int cmd,
 	case FBIOGETCMAP:
 	case FBIOPUTCMAP:
 		ret = fb_getput_cmap(info, cmd, arg);
-		break;
-
-	case FB_RGER_IOCTL:
-		if (copy_from_user(&user_rr, argp, sizeof(user_rr)))
-			return -EFAULT;
-		if(user_rr.buffer_size<=0)
-			user_rr.buffer_size = 1;
-		if(user_rr.buffer_size>32)
-			user_rr.buffer_size = 32;
-
-		fb_user_to_kernel(&user_rr,&rr);
-		if(rr==NULL){
-			printk("rr is null\n");
-			return -EFAULT;
-		}
-		console_lock();
-		if (!lock_fb_info(info)) {
-			console_unlock();
-			kfree(rr->buffer);
-			kfree(rr);
-			return -ENODEV;
-		}
-		if(fb_read_reg(info, rr))
-		{
-			unlock_fb_info(info);
-			console_unlock();
-			kfree(rr->buffer);
-			kfree(rr);
-			return -ENODEV;
-		}
-		unlock_fb_info(info);
-		console_unlock();
-		copy_size = (0==user_rr.buffer_size*sizeof(__u8)%4) ? user_rr.buffer_size*sizeof(__u8) : user_rr.buffer_size*sizeof(__u8) + (4 -  user_rr.buffer_size*sizeof(__u8)%4);
-		ret = copy_to_user(user_rr.buffer, rr->buffer, copy_size) ? -EFAULT : 0;
-		kfree(rr->buffer);
-		kfree(rr);
 		break;
 
 	default:

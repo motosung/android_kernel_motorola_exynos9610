@@ -39,17 +39,16 @@
 #define MFC_MAX_DPBS			32
 #define MFC_MAX_BUFFERS			32
 #define MFC_MAX_EXTRA_BUF		10
+#define MFC_TIME_INDEX			15
 #define MFC_SFR_LOGGING_COUNT_SET0	10
 #define MFC_SFR_LOGGING_COUNT_SET1	28
 #define MFC_SFR_LOGGING_COUNT_SET2	32
 #define MFC_LOGGING_DATA_SIZE		950
 #define MFC_MAX_DEFAULT_PARAM		100
 
-/* OTF */
 #define HWFC_MAX_BUF			10
 #define OTF_MAX_BUF			30
 
-/* HDR */
 #define HDR_MAX_WINDOWS			3
 #define HDR_MAX_SCL			3
 #define HDR_MAX_DISTRIBUTION		15
@@ -58,15 +57,9 @@
 /* Maximum number of temporal layers */
 #define VIDEO_MAX_TEMPORAL_LAYERS	7
 
-/* Batch mode */
 #define MAX_NUM_IMAGES_IN_VB		8
 #define MAX_NUM_BUFCON_BUFS		32
-
-/* QoS */
-#define MAX_TIME_INDEX			15
 #define MAX_NUM_CLUSTER			3
-#define MAX_NUM_MFC_BPS			2
-#define MAX_NUM_MFC_FREQ		10
 
 /*
  *  MFC region id for smc
@@ -196,6 +189,13 @@ enum mfc_vb_flag {
 	MFC_FLAG_LAST_FRAME		= 31,
 };
 
+enum mfc_idle_mode {
+	MFC_IDLE_MODE_NONE	= 0,
+	MFC_IDLE_MODE_RUNNING	= 1,
+	MFC_IDLE_MODE_IDLE	= 2,
+	MFC_IDLE_MODE_CANCEL	= 3,
+};
+
 struct mfc_ctx;
 
 enum mfc_debug_cause {
@@ -221,6 +221,18 @@ enum mfc_debug_cause {
 	MFC_LAST_INFO_POWER                     = 29,
 	MFC_LAST_INFO_SHUTDOWN                  = 30,
 	MFC_LAST_INFO_DRM                       = 31,
+};
+
+enum mfc_real_time {
+	/* real-time */
+	MFC_RT                  = 0,
+	/* low-priority real-time */
+	MFC_RT_LOW              = 1,
+	/* constrained real-time */
+	MFC_RT_CON              = 2,
+	/* non real-time */
+	MFC_NON_RT              = 3,
+	MFC_RT_UNDEFINED        = 4,
 };
 
 struct mfc_debug {
@@ -364,6 +376,7 @@ struct mfc_debugfs {
 #endif
 	struct dentry *debug_level;
 	struct dentry *debug_ts;
+	struct dentry *debug_mode_en;
 	struct dentry *dbg_enable;
 	struct dentry *nal_q_dump;
 	struct dentry *nal_q_disable;
@@ -490,9 +503,6 @@ struct mfc_platdata {
 	struct mfc_qos *qos_table;
 	struct mfc_qos_boost *qos_boost_table;
 #endif
-	int num_mfc_freq;
-	unsigned int mfc_freqs[MAX_NUM_MFC_FREQ];
-	unsigned int max_Kbps[MAX_NUM_MFC_BPS];
 	/* NAL-Q size */
 	unsigned int nal_q_entry_size;
 	unsigned int nal_q_dump_size;
@@ -773,11 +783,6 @@ struct mfc_mmcache {
 	int is_on_status;
 };
 
-struct mfc_bitrate_table {
-	int mfc_freq;
-	int bps_interval;
-};
-
 /**
  * struct mfc_dev - The struct containing driver internal parameters.
  */
@@ -795,12 +800,6 @@ struct mfc_dev {
 	void __iomem		*sysmmu0_base;
 	void __iomem		*sysmmu1_base;
 	void __iomem		*hwfc_base;
-	/* for MMCACHE */
-	void __iomem		*cmu_busc_base;
-	void __iomem		*cmu_mif0_base;
-	void __iomem		*cmu_mif1_base;
-	void __iomem		*cmu_mif2_base;
-	void __iomem		*cmu_mif3_base;
 
 	int			irq;
 	struct resource		*mfc_mem;
@@ -812,7 +811,8 @@ struct mfc_dev {
 	struct mfc_debug	*logging_data;
 
 	int num_inst;
-	int num_otf_inst;
+
+	unsigned long otf_inst_bits;
 
 	struct mutex mfc_mutex;
 
@@ -826,7 +826,6 @@ struct mfc_dev {
 	bool has_2sysmmu;
 	bool has_hwfc;
 	bool has_mmcache;
-	bool has_cmu;
 
 	struct mfc_special_buf common_ctx_buf;
 	struct mfc_special_buf drm_common_ctx_buf;
@@ -847,6 +846,14 @@ struct mfc_dev {
 	struct workqueue_struct *watchdog_wq;
 	struct work_struct watchdog_work;
 
+	atomic_t hw_run_cnt;
+	atomic_t queued_cnt;
+	struct mutex idle_qos_mutex;
+	enum mfc_idle_mode idle_mode;
+	struct timer_list mfc_idle_timer;
+	struct workqueue_struct *mfc_idle_wq;
+	struct work_struct mfc_idle_work;
+
 	/* for DRM */
 	int curr_ctx_is_drm;
 	int num_drm_inst;
@@ -858,7 +865,6 @@ struct mfc_dev {
 
 #ifdef CONFIG_MFC_USE_BUS_DEVFREQ
 	struct list_head qos_queue;
-	spinlock_t qos_lock;
 	atomic_t qos_req_cur;
 	struct pm_qos_request qos_req_mfc;
 	struct pm_qos_request qos_req_int;
@@ -866,11 +872,7 @@ struct mfc_dev {
 	struct pm_qos_request qos_req_cluster[MAX_NUM_CLUSTER];
 	int qos_has_enc_ctx;
 	struct mutex qos_mutex;
-	int mfc_freq_by_bps;
 #endif
-	struct mfc_bitrate_table bitrate_table[MAX_NUM_MFC_FREQ];
-	int bps_ratio;
-
 	int id;
 	atomic_t clk_ref;
 
@@ -1127,15 +1129,14 @@ struct mfc_enc_params {
 	u8 pad_cb;
 	u8 pad_cr;
 
+	u8 fixed_target_bit;
 	u8 rc_mb;		/* H.264: MFCv5, MPEG4/H.263: MFCv6 */
 	u8 rc_pvc;
 	u8 rc_frame;
-	u8 drop_control;
 	u32 rc_bitrate;
 	u32 rc_framerate;
 	u16 rc_reaction_coeff;
 	u16 rc_frame_delta;	/* MFC6.1 Only */
-	u32 rc_framerate_res;
 
 	u32 config_qp;
 	u32 dynamic_qp;
@@ -1152,7 +1153,6 @@ struct mfc_enc_params {
 	u8 weighted_enable;
 	u8 roi_enable;
 	u8 ivf_header_disable;	/* VP8, VP9 */
-	u8 fixed_target_bit;
 
 	u32 check_color_range;
 	u32 color_range;
@@ -1257,8 +1257,7 @@ struct mfc_ctrls_ops {
 			struct list_head *head, EncoderInputStr *pInStr);
 	int (*get_buf_ctrls_val_nal_q_enc) (struct mfc_ctx *ctx,
 			struct list_head *head, EncoderOutputStr *pOutStr);
-	int (*recover_buf_ctrls_nal_q) (struct mfc_ctx *ctx,
-			struct list_head *head);
+	int (*restore_buf_ctrls) (struct mfc_ctx *ctx, struct list_head *head);
 };
 
 struct stored_dpb_info {
@@ -1369,11 +1368,6 @@ struct mfc_timestamp {
 	int interval;
 };
 
-struct mfc_bitrate {
-	struct list_head list;
-	int bytesused;
-};
-
 struct mfc_dec {
 	int total_dpb_count;
 
@@ -1419,6 +1413,12 @@ struct mfc_dec {
 	struct mfc_user_shared_handle sh_handle_dpb;
 	struct mfc_user_shared_handle sh_handle_hdr;
 	struct hdr10_plus_meta *hdr10_plus_info;
+
+	struct dma_buf *assigned_dmabufs[MFC_MAX_DPBS][2][MFC_MAX_PLANES];
+	struct dma_buf_attachment *assigned_attach[MFC_MAX_DPBS][2][MFC_MAX_PLANES];
+	dma_addr_t assigned_addr[MFC_MAX_DPBS][2][MFC_MAX_PLANES];
+	int assigned_refcnt[MFC_MAX_DPBS];
+	struct mutex dpb_mutex;
 
 	int has_multiframe;
 
@@ -1506,6 +1506,10 @@ struct mfc_ctx {
 	int int_condition;
 	int int_reason;
 	unsigned int int_err;
+	
+
+	int prio;
+	enum mfc_real_time rt;
 
 	struct mfc_fmt *src_fmt;
 	struct mfc_fmt *dst_fmt;
@@ -1569,6 +1573,7 @@ struct mfc_ctx {
 
 	unsigned long framerate;
 	unsigned long last_framerate;
+	unsigned long operating_framerate;
 	unsigned int qos_ratio;
 
 #ifdef CONFIG_MFC_USE_BUS_DEVFREQ
@@ -1576,19 +1581,10 @@ struct mfc_ctx {
 	struct list_head qos_list;
 #endif
 
-	struct mfc_timestamp ts_array[MAX_TIME_INDEX];
+	struct mfc_timestamp ts_array[MFC_TIME_INDEX];
 	struct list_head ts_list;
 	int ts_count;
 	int ts_is_full;
-	int ts_last_interval;
-
-	/* bitrate control for QoS*/
-	struct mfc_bitrate bitrate_array[MAX_TIME_INDEX];
-	struct list_head bitrate_list;
-	int bitrate_index;
-	int bitrate_is_full;
-	int Kbps;
-	int last_bps_section;
 
 	int buf_process_type;
 

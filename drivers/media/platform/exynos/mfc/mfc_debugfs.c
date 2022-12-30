@@ -22,6 +22,7 @@
 
 unsigned int debug_level;
 unsigned int debug_ts;
+unsigned int debug_mode_en;
 unsigned int dbg_enable;
 unsigned int nal_q_dump;
 unsigned int nal_q_disable;
@@ -45,14 +46,16 @@ static int __mfc_info_show(struct seq_file *s, void *unused)
 	seq_printf(s, "[VERSION] H/W: v%x.%x, F/W: %06x(%c), DRV: %d\n",
 		 MFC_VER_MAJOR(dev), MFC_VER_MINOR(dev), dev->fw.date,
 		 dev->fw.fimv_info, MFC_DRIVER_INFO);
-	seq_printf(s, "[PM] power: %d, clock: %d\n",
-			mfc_pm_get_pwr_ref_cnt(dev), mfc_pm_get_clk_ref_cnt(dev));
+	seq_printf(s, "[PM] power: %d, clock: %d, QoS level: %d\n",
+			mfc_pm_get_pwr_ref_cnt(dev), mfc_pm_get_clk_ref_cnt(dev),
+			atomic_read(&dev->qos_req_cur) - 1);
 	seq_printf(s, "[CTX] num_inst: %d, num_drm_inst: %d, curr_ctx: %d(is_drm: %d)\n",
 			dev->num_inst, dev->num_drm_inst, dev->curr_ctx, dev->curr_ctx_is_drm);
 	seq_printf(s, "[HWLOCK] bits: %#lx, dev: %#lx, owned_by_irq = %d, wl_count = %d\n",
 			dev->hwlock.bits, dev->hwlock.dev,
 			dev->hwlock.owned_by_irq, dev->hwlock.wl_count);
-	seq_printf(s, "[DEBUG MODE] %s\n", dev->pdata->debug_mode ? "enabled" : "disabled");
+	seq_printf(s, "[DEBUG MODE] dt: %s sysfs: %s\n", dev->pdata->debug_mode ? "enabled" : "disabled",
+			debug_mode_en ? "enabled" : "disabled");
 	seq_printf(s, "[MMCACHE] %s(%s)\n",
 			dev->has_mmcache ? "supported" : "not supported",
 			dev->mmcache.is_on_status ? "enabled" : "disabled");
@@ -84,11 +87,19 @@ static int __mfc_info_show(struct seq_file *s, void *unused)
 			else
 				codec_name = ctx->dst_fmt->name;
 
-			seq_printf(s, "[CTX:%d] codec: %s(%s), width: %d, height: %d, crop: %d %d %d %d, state: %d\n",
-				ctx->num, ctx->type == MFCINST_DECODER ? "DEC" : "ENC", codec_name,
-				ctx->img_width, ctx->img_height, ctx->crop_width, ctx->crop_height,
+			seq_printf(s, "[CTX:%d] %s %s, %s, %s, size: %dx%d@%ldfps(op: %ldfps), crop: %d %d %d %d, state: %d\n",
+				ctx->num,
+				ctx->type == MFCINST_DECODER ? "DEC" : "ENC",
+				ctx->is_drm ? "Secure" : "Normal",
+				ctx->state > MFCINST_INIT ? ctx->src_fmt->name : "undefined src fmt",
+				ctx->state > MFCINST_INIT ? ctx->dst_fmt->name : "undefined dst fmt",
+				ctx->img_width, ctx->img_height,
+				ctx->last_framerate / 1000,
+				ctx->operating_framerate,
+				ctx->crop_width, ctx->crop_height,
 				ctx->crop_left, ctx->crop_top, ctx->state);
-			seq_printf(s, "        queue(src: %d, dst: %d, src_nal: %d, dst_nal: %d, ref: %d)\n",
+			seq_printf(s, "        prio %d, rt %d, queue(src: %d, dst: %d, src_nal: %d, dst_nal: %d, ref: %d)\n",
+				ctx->prio, ctx->rt,
 				mfc_get_queue_count(&ctx->buf_queue_lock, &ctx->src_buf_queue),
 				mfc_get_queue_count(&ctx->buf_queue_lock, &ctx->dst_buf_queue),
 				mfc_get_queue_count(&ctx->buf_queue_lock, &ctx->src_buf_nal_queue),
@@ -259,6 +270,8 @@ void mfc_init_debugfs(struct mfc_dev *dev)
 			0644, debugfs->root, &debug_level);
 	debugfs->debug_ts = debugfs_create_u32("debug_ts",
 			0644, debugfs->root, &debug_ts);
+	debugfs->debug_mode_en = debugfs_create_u32("debug_mode_en",
+			0644, debugfs->root, &debug_mode_en);
 	debugfs->dbg_enable = debugfs_create_u32("dbg_enable",
 			0644, debugfs->root, &dbg_enable);
 	debugfs->nal_q_dump = debugfs_create_u32("nal_q_dump",
