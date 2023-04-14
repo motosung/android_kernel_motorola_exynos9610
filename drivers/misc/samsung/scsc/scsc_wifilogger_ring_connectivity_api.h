@@ -14,7 +14,7 @@
  *  once to be invoked on fw events and the other on driver events.
  */
 
-#if IS_ENABLED(CONFIG_SCSC_WIFILOGGER)
+#ifdef CONFIG_SCSC_WIFILOGGER
 
 #include "scsc_wifilogger_ring_connectivity.h"
 /**
